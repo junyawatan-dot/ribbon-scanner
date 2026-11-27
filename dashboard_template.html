@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ribbon scanner</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262a33; --text:#e6e8ec; --muted:#8b93a1;
+          --gold:#f2b705; --blue:#3b6fd8; --grey:#7c828c; --accent:#4cc38a; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:20px 24px 8px; }
+  h1 { margin:0; font-size:20px; font-weight:600; }
+  .sub { color:var(--muted); margin-top:4px; }
+  .wrap { padding:0 24px 40px; max-width:1300px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin:16px 0; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; cursor:pointer; }
+  .card.active { border-color:var(--accent); }
+  .card .n { font-size:24px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .card .l { color:var(--muted); font-size:12px; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:10px 0; }
+  input, select { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 10px; font:inherit; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th, td { padding:7px 10px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
+  th { color:var(--muted); font-weight:500; font-size:12px; cursor:pointer; user-select:none; position:sticky; top:0; background:var(--panel); }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  tr:hover td { background:#1d2129; }
+  a { color:#8fb4ff; text-decoration:none; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; font-weight:600; }
+  .gold { background:rgba(242,183,5,.18); color:var(--gold); }
+  .blue { background:rgba(59,111,216,.22); color:#8fb0f2; }
+  .grey { background:rgba(124,130,140,.22); color:#c3c8d0; }
+  .ev { font-size:12px; color:var(--text); }
+  .strip { display:inline-flex; gap:1px; vertical-align:middle; }
+  .strip i { width:5px; height:14px; border-radius:1px; display:inline-block; }
+  .strip i.gold { background:var(--gold); } .strip i.blue { background:var(--blue); } .strip i.grey { background:var(--grey); }
+  h2 { font-size:15px; font-weight:600; margin:28px 0 8px; }
+  .note { color:var(--muted); font-size:12px; margin-top:24px; max-width:900px; }
+  .scroll { overflow-x:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ribbon scanner — CoinGecko top coins, daily close</h1>
+  <div class="sub" id="sub"></div>
+</header>
+<div class="wrap">
+  <div class="cards" id="cards"></div>
+  <div class="bar">
+    <input id="q" placeholder="Search coin…" size="22">
+    <select id="colour"><option value="">All colours</option><option>gold</option><option>blue</option><option>grey</option></select>
+    <select id="event"><option value="">Any event today</option><option value="__any">Has an event today</option></select>
+    <span class="sub" id="count"></span>
+  </div>
+  <div class="scroll">
+  <table id="tbl">
+    <thead><tr>
+      <th data-k="rank">#</th><th data-k="symbol">Coin</th><th data-k="colour">Colour</th>
+      <th data-k="days">Days in colour</th><th data-k="event">Today's event</th>
+      <th>Last 30 days</th><th data-k="close">Close</th><th data-k="exchange">Data from</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  </div>
+
+  <h2>Recent flips (last 90 days)</h2>
+  <div class="bar">
+    <select id="hev"><option value="">All events</option></select>
+  </div>
+  <div class="scroll"><table id="hist"><thead><tr><th>Date</th><th>#</th><th>Coin</th><th>Event</th><th>Close</th></tr></thead><tbody></tbody></table></div>
+
+  <p class="note" id="skipped"></p>
+  <p class="note">Colours approximate the Larsson Line with 15/19/25/29 smoothed moving averages of the high/low midpoint. Gold = fast above slow and ordered, blue = fast below slow and ordered, grey = mixed. Signals are untested on most of these coins and are not financial advice.</p>
+</div>
+<script>
+const D = /*__DATA__*/null;
+const L = D.labels;
+const fmt = p => p == null ? "-" : p >= 100 ? p.toLocaleString(undefined,{maximumFractionDigits:2}) : p >= 1 ? p.toFixed(4) : Number(p.toPrecision(4)).toString();
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const tv = r => `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.tv)}`;
+document.getElementById("sub").textContent = `Daily close ${D.run_date} UTC · updated ${D.generated} · ${D.rows.length} coins`;
+
+const evSel = document.getElementById("event"), hevSel = document.getElementById("hev");
+for (const [k, v] of Object.entries(L)) { evSel.add(new Option(v, k)); hevSel.add(new Option(v, k)); }
+
+let sortK = "rank", sortDir = 1, cardFilter = "";
+const cards = [
+  ["blue_to_grey", "Blue → grey today"], ["back_to_gold", "Gold → grey → gold today"],
+  ["gold_to_grey", "Gold → grey today"], ["back_to_blue", "Blue → grey → blue today"],
+  ["c:gold", "Gold now"], ["c:blue", "Blue now"], ["c:grey", "Grey now"],
+];
+function renderCards() {
+  document.getElementById("cards").innerHTML = cards.map(([k, l]) => {
+    const n = k.startsWith("c:") ? D.rows.filter(r => r.colour === k.slice(2)).length : D.rows.filter(r => r.event === k).length;
+    return `<div class="card ${cardFilter===k?"active":""}" data-k="${k}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+  }).join("");
+  document.querySelectorAll(".card").forEach(c => c.onclick = () => {
+    const k = c.dataset.k; cardFilter = cardFilter === k ? "" : k;
+    document.getElementById("colour").value = cardFilter.startsWith("c:") ? cardFilter.slice(2) : "";
+    evSel.value = cardFilter && !cardFilter.startsWith("c:") ? cardFilter : "";
+    renderCards(); render();
+  });
+}
+function render() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const col = document.getElementById("colour").value, ev = evSel.value;
+  let rows = D.rows.filter(r =>
+    (!q || r.symbol.toLowerCase().includes(q) || r.name.toLowerCase().includes(q)) &&
+    (!col || r.colour === col) && (!ev || (ev === "__any" ? r.event : r.event === ev)));
+  rows.sort((a, b) => { const x = a[sortK] ?? "", y = b[sortK] ?? ""; return (x > y ? 1 : x < y ? -1 : 0) * sortDir; });
+  document.getElementById("count").textContent = `${rows.length} shown`;
+  document.querySelector("#tbl tbody").innerHTML = rows.map(r => `<tr>
+    <td class="num">${r.rank ?? ""}</td>
+    <td><a href="${tv(r)}" target="_blank" rel="noopener"><b>${esc(r.symbol)}</b></a> <span class="sub">${esc(r.name)}</span></td>
+    <td><span class="pill ${r.colour}">${r.colour}</span></td>
+    <td class="num">${r.days}</td>
+    <td class="ev">${r.event ? esc(L[r.event]) : ""}</td>
+    <td><span class="strip">${r.recent.map(c => `<i class="${c}"></i>`).join("")}</span></td>
+    <td class="num">${fmt(r.close)}</td>
+    <td class="sub">${esc(r.exchange)} ${esc(r.pair)}</td></tr>`).join("");
+}
+function renderHist() {
+  const ev = hevSel.value;
+  const h = D.history.filter(x => !ev || x.event === ev);
+  document.querySelector("#hist tbody").innerHTML = h.length ? h.map(x => `<tr><td>${x.date}</td><td class="num">${x.rank ?? ""}</td>
+    <td><a href="${tv(x)}" target="_blank" rel="noopener"><b>${esc(x.symbol)}</b></a> <span class="sub">${esc(x.name)}</span></td>
+    <td class="ev">${esc(L[x.event] || x.event)}</td><td class="num">${fmt(x.close)}</td></tr>`).join("")
+    : `<tr><td colspan="5" class="sub">No flips recorded yet. History builds up one day at a time.</td></tr>`;
+}
+document.querySelectorAll("#tbl th[data-k]").forEach(th => th.onclick = () => {
+  const k = th.dataset.k; sortDir = sortK === k ? -sortDir : 1; sortK = k; render();
+});
+["q", "colour"].forEach(id => document.getElementById(id).oninput = () => { cardFilter = ""; renderCards(); render(); });
+evSel.onchange = () => { cardFilter = ""; renderCards(); render(); };
+hevSel.onchange = renderHist;
+if (D.skipped.length) document.getElementById("skipped").textContent =
+  `Skipped (no matching exchange data or feed behind): ${D.skipped.map(s => s.symbol).join(", ")}`;
+renderCards(); render(); renderHist();
+</script>
+</body>
+</html>
