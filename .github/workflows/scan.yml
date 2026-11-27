@@ -1,0 +1,45 @@
+name: Daily ribbon scan
+
+on:
+  schedule:
+    - cron: "5 0 * * *"      # 00:05 UTC, just after the daily candle closes
+  workflow_dispatch:          # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ribbon-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install ccxt requests
+
+      - name: Scan
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+          ALERT_EVENTS: ${{ vars.ALERT_EVENTS || 'blue_to_grey' }}
+          TOP_N: ${{ vars.TOP_N || '500' }}
+        run: python scanner.py
+
+      - name: Publish dashboard
+        run: |
+          git config user.name "ribbon-bot"
+          git config user.email "ribbon-bot@users.noreply.github.com"
+          git add docs
+          git commit -m "Scan $(date -u +%F)" || echo "nothing to commit"
+          git push
